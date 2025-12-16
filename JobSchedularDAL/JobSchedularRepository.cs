@@ -10,7 +10,7 @@ namespace JobSchedularDAL
 {
     public class JobSchedularRepository : IJobSchedular
     {
-        public readonly JobSchedularDbContext _context;
+        private readonly JobSchedularDbContext _context;
 
         public JobSchedularRepository()
         {

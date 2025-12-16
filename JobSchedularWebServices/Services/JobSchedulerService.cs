@@ -13,40 +13,50 @@ namespace JobSchedularWebServices.Services
         {
             while (!stoppingToken.IsCancellationRequested)
             {
-                using (var scope = _scopeFactory.CreateScope())
+                try
                 {
-                    var repo = scope.ServiceProvider.GetRequiredService<IJobSchedular>();
-
-                    // 1. Get all ACTIVE job schedules
-                    var schedules = repo.GetJobSchedules();
-
-                    // 2. Check which jobs are due NOW
-                    var dueJobs = schedules.Where(s =>
-                         s.ScheduledExecutionTime <= DateTime.Now &&
-                          s.Status == "Scheduled"
-                    ).ToList();
-
-                    // 3. Execute each due job
-                    foreach (var job in dueJobs)
+                    using (var scope = _scopeFactory.CreateScope())
                     {
-                        Models.JobSchedule job1 = new Models.JobSchedule
-                        {
-                            JobId = job.JobId,
-                            ScheduledExecutionTime = job.ScheduledExecutionTime,
-                            Status = job.Status
-                        };
-                        await ExecuteJobAsync(job1, repo);
+                        var repo = scope.ServiceProvider.GetRequiredService<IJobSchedular>();
 
-                        // 4. Update next run time
-                        job1.NextRunTime = CalculateNextRun(job1.SchedulePattern);
-                        repo.UpdateJobSchedule(job);
+                        // 1. Get all ACTIVE job schedules
+                        var schedules = repo.GetJobSchedules();
+
+                        // 2. Check which jobs are due NOW
+                        var dueJobs = schedules.Where(s =>
+                             s.ScheduledExecutionTime <= DateTime.Now &&
+                             s.Status == "Scheduled"
+                        ).ToList();
+
+                        // 3. Execute each due job
+                        foreach (var job in dueJobs)
+                        {
+                            Models.JobSchedule job1 = new Models.JobSchedule
+                            {
+                                JobId = job.JobId,
+                                ScheduledExecutionTime = job.ScheduledExecutionTime,
+                                Status = job.Status
+                            };
+
+                            await ExecuteJobAsync(job1, repo);
+
+                            // 4. Update next run time
+                            job1.NextRunTime = CalculateNextRun(job1.SchedulePattern);
+                            repo.UpdateJobSchedule(job);
+                        }
                     }
+                }
+                catch (Exception ex)
+                {
+                    // Log the error (recommended)
+                    _logger.LogError(ex, "Error occurred in JobSchedulerService ExecuteAsync loop.");
                 }
 
                 // 5. Wait before checking again
                 await Task.Delay(TimeSpan.FromMinutes(1), stoppingToken);
             }
         }
+
 
         private DateTime? CalculateNextRun(string cronExpression)
         {

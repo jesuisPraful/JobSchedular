@@ -1,0 +1,60 @@
+﻿Use [master]
+GO
+
+IF (EXISTS (SELECT name FROM master.dbo.sysdatabases WHERE ('[' + name + ']' = N''OR name = N'EmailServiceDB')))
+DROP DATABASE EmailServiceDB
+GO
+
+CREATE DATABASE EmailServiceDB
+GO
+
+Use EmailServiceDB
+GO
+
+CREATE TABLE Emails (
+    Id UNIQUEIDENTIFIER PRIMARY KEY,
+    ToEmail VARCHAR(255) NOT NULL,
+    Cc VARCHAR(500),
+    Bcc VARCHAR(500),
+    Subject VARCHAR(500) NOT NULL,
+    Body TEXT NOT NULL,
+    TemplateId UNIQUEIDENTIFIER NULL,
+    Status VARCHAR(20) NOT NULL CHECK (Status IN ('Pending', 'Sent', 'Failed', 'Retrying')),
+    RetryCount INT NOT NULL DEFAULT 0,
+    CreatedAt DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    SentAt DATETIME NULL
+);
+GO
+
+
+CREATE TABLE EmailLogs (
+    Id UNIQUEIDENTIFIER  PRIMARY KEY,
+    EmailId UNIQUEIDENTIFIER NOT NULL,
+    ProviderResponse TEXT,
+    ErrorMessage TEXT,
+    LoggedAt DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    
+    CONSTRAINT FK_EmailLogs_Emails
+        FOREIGN KEY (EmailId) REFERENCES Emails(Id)
+        ON DELETE CASCADE
+);
+GO
+
+
+CREATE TABLE EmailTemplates (
+    Id UNIQUEIDENTIFIER PRIMARY KEY,
+    Name VARCHAR(200) NOT NULL UNIQUE,
+    Subject VARCHAR(500) NOT NULL,
+    Body TEXT NOT NULL,
+    CreatedAt DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+GO
+
+CREATE TABLE OutboxEmails (
+    Id UNIQUEIDENTIFIER  PRIMARY KEY,
+    Payload NVARCHAR(MAX) NOT NULL,
+    Status VARCHAR(20) NOT NULL CHECK (Status IN ('Pending', 'Processed', 'Failed')),
+    CreatedAt DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    ProcessedAt DATETIME NULL
+);
+GO

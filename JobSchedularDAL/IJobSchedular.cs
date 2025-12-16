@@ -24,11 +24,8 @@ namespace JobSchedularDAL
         public List<JobDefinition> GetJobDefinitions();
         public List<JobDefinition> GetJobDefinitionsByUserId(string userId);
         public JobDefinition GetJobDefinitionById(string jobId);
-
         public JobDefinition GetJobDefinitionByDefinitionName(string jobName);
-
         public bool UpdateJobDefinition(JobDefinition jobDefinition);
-
         public bool DeleteJobDefinition(string jobId);
         #endregion
 
