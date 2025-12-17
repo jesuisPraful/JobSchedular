@@ -58,7 +58,7 @@ namespace EmailServiceDAL
             List<Email> emails = new List<Email>();
             try
             {
-                emails = await _context.Emails.AsNoTracking().Where(e => e.Status == "pending").ToListAsync();
+                emails = await _context.Emails.AsNoTracking().Where(e => (e.Status == "pending" || e.Status== "Retrying") && e.RetryCount< 3).OrderBy(e=>e.CreatedAt).Take(10).ToListAsync();
             }
             catch (Exception)
             {

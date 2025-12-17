@@ -1,7 +1,10 @@
 ﻿using JobSchedularDAL.Models;
+using Microsoft.EntityFrameworkCore;
+using Microsoft.Extensions.Logging;
 using System;
 using System.Collections.Generic;
 using System.Linq;
+using System.Runtime.CompilerServices;
 using System.Runtime.Intrinsics.X86;
 using System.Text;
 using System.Threading.Tasks;
@@ -11,21 +14,23 @@ namespace JobSchedularDAL
     public class JobSchedularRepository : IJobSchedular
     {
         private readonly JobSchedularDbContext _context;
+        private readonly ILogger<JobSchedularRepository> _logger;
 
-        public JobSchedularRepository()
+        public JobSchedularRepository(ILogger<JobSchedularRepository> logger)
         {
             _context = new JobSchedularDbContext();
+            _logger = logger;
         }
 
         #region User
-        public bool AddUser(User user)
+        public async Task<bool> AddUser(User user)
         {
             if (user == null)
                 throw new ArgumentNullException(nameof(user));
 
             try
             {
-                _context.Users.Add(user);
+                await _context.Users.AddAsync(user);
                 _context.SaveChanges();
                 return true;
             }
@@ -36,11 +41,11 @@ namespace JobSchedularDAL
             }
         }
 
-        public List<User>? GetUsers()
+        public async Task<List<User>> GetUsers()
         {
             try
             {
-                return _context.Users.ToList();
+                return await _context.Users.AsNoTracking().ToListAsync();
             }
             catch (Exception ex)
             {
@@ -49,11 +54,11 @@ namespace JobSchedularDAL
             }
         }
 
-        public User? GetUserById(string userId)
+        public async Task<User> GetUserById(string userId)
         {
             try
             {
-                return _context.Users.Find(userId);
+                return await _context.Users.FindAsync(userId);
             }
             catch (Exception ex)
             {
@@ -63,12 +68,12 @@ namespace JobSchedularDAL
             }
         }
 
-        public User GetUserByEmail(string email)
+        public async Task<User> GetUserByEmail(string email)
         {
 
             try
             {
-                var user = _context.Users.Where(user => user.Email == email).FirstOrDefault();
+                var user = await _context.Users.Where(user => user.Email == email).FirstOrDefaultAsync();
                 return user;
             }
             catch (Exception ex)
@@ -78,14 +83,51 @@ namespace JobSchedularDAL
             }
         }
 
-        public bool UpdateUser(User user)
+        public async Task<JobSchedule> ClaimJobAsync(string jobId)
+        {
+            try
+            {
+                var rowsAffected = await _context.JobSchedules
+                .Where(s => s.JobId == jobId && s.Status == "Scheduled")
+                .ExecuteUpdateAsync(setters => setters
+                    .SetProperty(s => s.Status, "Running"));
+
+                if (rowsAffected == 0)
+                {
+                    return null;
+                }
+                else
+                {
+                    return await _context.JobSchedules.FirstOrDefaultAsync(s => s.JobId == jobId);
+                }
+            }
+            catch (Exception)
+            {
+                _logger.LogError("Error claiming job with ID {JobId}", jobId);  
+                return null;
+            }
+            
+        }
+        public async Task<bool> UpdateUser(User user)
         {
             bool status = true;
             try
             {
-                _context.Users.Update(user);
-                _context.SaveChanges();
-                status = true;
+                var existingUser = await _context.Users.FindAsync(user.UserId);
+                if(existingUser == null)
+                {
+                    _logger.LogWarning($"User with ID {user.UserId} not found.");
+                    return false;
+                }
+                else
+                {
+                    //existingUser.Username = user.Username;
+                    //existingUser.Email = user.Email;
+                    //existingUser.Password = user.Password;
+                    _context.Users.Update(user);
+                    await _context.SaveChangesAsync();
+                    status = true;
+                }
             }
             catch (Exception ex)
             {
@@ -96,17 +138,22 @@ namespace JobSchedularDAL
 
         }
 
-        public bool DeleteUser(string userId)
+        public async Task<bool> DeleteUser(string userId)
         {
             bool status = false;
             try
             {
-                var user = _context.Users.Find(userId);
+                var user = await _context.Users.FindAsync(userId);
                 if (user != null)
                 {
                     _context.Users.Remove(user);
-                    _context.SaveChanges();
+                    _context.SaveChangesAsync();
                     status = true;
+                }
+                else
+                {
+                    _logger.LogWarning($"User with ID {userId} not found.");
+                    status = false;
                 }
             }
             catch (Exception ex)
@@ -120,12 +167,12 @@ namespace JobSchedularDAL
         #endregion
 
         #region Job Definition
-        public bool AddJobDefinition(JobDefinition jobDefinition)
+        public async Task<bool> AddJobDefinition(JobDefinition jobDefinition)
         {
             bool status = false;
             try
             {
-                _context.JobDefinitions.Add(jobDefinition);
+                await _context.JobDefinitions.AddAsync(jobDefinition);
                 _context.SaveChanges();
                 status = true;
             }
@@ -136,12 +183,12 @@ namespace JobSchedularDAL
             return status;
         }
 
-        public List<JobDefinition> GetJobDefinitions()
+        public async Task<List<JobDefinition>> GetJobDefinitions()
         {
 
             try
             {
-                var jobDefinitions = _context.JobDefinitions.ToList();
+                var jobDefinitions = await _context.JobDefinitions.AsNoTracking().ToListAsync();
                 return jobDefinitions;
 
             }
@@ -152,12 +199,12 @@ namespace JobSchedularDAL
             }
         }
 
-        public JobDefinition GetJobDefinitionById(string jobId)
+        public async Task<JobDefinition> GetJobDefinitionById(string jobId)
         {
             JobDefinition jobDefinition = new JobDefinition();
             try
             {
-                jobDefinition = _context.JobDefinitions.Find(jobId);
+                jobDefinition = await _context.JobDefinitions.AsNoTracking().Where(j => j.JobId == jobId).FirstOrDefaultAsync();
             }
             catch (Exception ex)
             {
@@ -165,12 +212,12 @@ namespace JobSchedularDAL
             }
             return jobDefinition;
         }
-        public List<JobDefinition> GetJobDefinitionsByUserId(string userId)
+        public async Task<List<JobDefinition>> GetJobDefinitionsByUserId(string userId)
         {
             List<JobDefinition> jobDefinitions = new List<JobDefinition>();
             try
             {
-                jobDefinitions = _context.JobDefinitions.Where(jd => jd.UserId == userId).ToList();
+                jobDefinitions = _context.JobDefinitions.AsNoTracking().Where(jd => jd.UserId == userId).ToList();
             }
             catch (Exception ex)
             {
@@ -179,12 +226,12 @@ namespace JobSchedularDAL
             return jobDefinitions;
         }
 
-        public JobDefinition GetJobDefinitionByDefinitionName(string jobName)
+        public async Task<JobDefinition> GetJobDefinitionByDefinitionName(string jobName)
         {
             JobDefinition jobDefinition = new JobDefinition();
             try
             {
-                jobDefinition = _context.JobDefinitions.Where(jd => jd.JobName == jobName).FirstOrDefault();
+                jobDefinition = await _context.JobDefinitions.AsNoTracking().Where(jd => jd.JobName == jobName).FirstOrDefaultAsync();
             }
             catch (Exception ex)
             {
@@ -193,14 +240,23 @@ namespace JobSchedularDAL
             return jobDefinition;
         }
 
-        public bool UpdateJobDefinition(JobDefinition jobDefinition)
+        public async Task<bool> UpdateJobDefinition(JobDefinition jobDefinition)
         {
             bool status = false;
             try
             {
-                _context.JobDefinitions.Update(jobDefinition);
-                _context.SaveChanges();
-                status = true;
+                JobDefinition existingJobDefinition = await _context.JobDefinitions.FindAsync(jobDefinition.JobId);
+                if (existingJobDefinition == null)
+                {
+                    _logger.LogWarning($"JobDefinition with ID {jobDefinition.JobId} not found.");
+                    status = false;
+                }
+                else
+                {
+                    _context.JobDefinitions.Update(jobDefinition);
+                    _context.SaveChanges();
+                    status = true;
+                }
             }
             catch (Exception ex)
             {
@@ -209,16 +265,16 @@ namespace JobSchedularDAL
             return status;
         }
 
-        public bool DeleteJobDefinition(string jobId)
+        public async Task<bool> DeleteJobDefinition(string jobId)
         {
             bool status = false;
             try
             {
-                var jobDefinition = _context.JobDefinitions.Find(jobId);
+                var jobDefinition = await _context.JobDefinitions.FindAsync(jobId);
                 if (jobDefinition != null)
                 {
                     _context.JobDefinitions.Remove(jobDefinition);
-                    _context.SaveChanges();
+                    _context.SaveChangesAsync();
                     status = true;
                 }
             }
@@ -231,7 +287,7 @@ namespace JobSchedularDAL
         #endregion
 
         #region Job Schedule
-        public bool AddJobSchedule(JobSchedule jobSchedule)
+        public async Task<bool> AddJobSchedule(JobSchedule jobSchedule)
         {
             bool status = false;
             try
@@ -247,7 +303,7 @@ namespace JobSchedularDAL
             return status;
         }
 
-        public List<JobSchedule> GetJobSchedules()
+        public async Task<List<JobSchedule>> GetJobSchedules()
         {
             try
             {
@@ -261,7 +317,7 @@ namespace JobSchedularDAL
             }
 
         }
-        public JobSchedule GetJobScheduleByJobId(string jobId)
+        public async Task<JobSchedule> GetJobScheduleByJobId(string jobId)
         {
             JobSchedule jobSchedule = new JobSchedule();
             try
@@ -275,7 +331,7 @@ namespace JobSchedularDAL
             return jobSchedule;
         }
 
-        public bool UpdateJobSchedule(JobSchedule jobSchedule)
+        public async Task<bool> UpdateJobSchedule(JobSchedule jobSchedule)
         {
             bool status = false;
             try
@@ -290,7 +346,7 @@ namespace JobSchedularDAL
             }
             return status;
         }
-        public bool DeleteJobSchedule(string jobId)
+        public async Task<bool> DeleteJobSchedule(string jobId)
         {
             bool status = false;
             try
@@ -312,13 +368,13 @@ namespace JobSchedularDAL
         #endregion  
 
         #region Job Execution Log 
-        public bool AddJobExecutionLog(JobExecutionLog jobExecutionLog)
+        public async Task<bool> AddJobExecutionLog(JobExecutionLog jobExecutionLog)
         {
             bool status = false;
             try
             {
-                _context.JobExecutionLogs.Add(jobExecutionLog);
-                _context.SaveChanges();
+                await _context.JobExecutionLogs.AddAsync(jobExecutionLog);
+                await _context.SaveChangesAsync();
                 status = true;
             }
             catch (Exception ex)
@@ -328,11 +384,11 @@ namespace JobSchedularDAL
             return status;
         }
 
-        public List<JobExecutionLog> GetJobExecutionLogs()
+        public async Task<List<JobExecutionLog>> GetJobExecutionLogs()
         {
             try
             {
-                var jobExecutionLogs = _context.JobExecutionLogs.ToList();
+                var jobExecutionLogs = await _context.JobExecutionLogs.ToListAsync();
                 return jobExecutionLogs;
             }
             catch (Exception)
@@ -343,12 +399,12 @@ namespace JobSchedularDAL
             }
         }
 
-        public JobExecutionLog GetJobExecutionLogsByJobId(string jobId)
+        public async Task<JobExecutionLog> GetJobExecutionLogsByJobId(string jobId)
         {
             JobExecutionLog jobExecutionLogs = new JobExecutionLog();
             try
             {
-                jobExecutionLogs = _context.JobExecutionLogs.Where(jel => jel.JobId == jobId).FirstOrDefault();
+                jobExecutionLogs = await _context.JobExecutionLogs.Where(jel => jel.JobId == jobId).FirstOrDefaultAsync();
             }
             catch (Exception ex)
             {
@@ -357,12 +413,12 @@ namespace JobSchedularDAL
             return jobExecutionLogs;
         }
 
-        public JobExecutionLog GetJobExecutionLogById(string executionLogId)
+        public async Task<JobExecutionLog> GetJobExecutionLogById(string executionLogId)
         {
             JobExecutionLog jobExecutionLog = new JobExecutionLog();
             try
             {
-                jobExecutionLog = _context.JobExecutionLogs.Find(executionLogId);
+                jobExecutionLog = await _context.JobExecutionLogs.FindAsync(executionLogId);
             }
             catch (Exception ex)
             {
@@ -371,11 +427,11 @@ namespace JobSchedularDAL
             return jobExecutionLog;
         }
 
-        public List<JobExecutionLog> GetExecutionLogByStatus(string status)
+        public async Task<List<JobExecutionLog>> GetExecutionLogByStatus(string status)
         {
             try
             {
-                var jobExecutionLog = _context.JobExecutionLogs.Where(jel => jel.ExecutionStatus == status).ToList();
+                var jobExecutionLog = await _context.JobExecutionLogs.Where(jel => jel.ExecutionStatus == status).ToListAsync();
                 return jobExecutionLog;
             }
             catch (Exception ex)
@@ -385,14 +441,23 @@ namespace JobSchedularDAL
             }
         }
 
-        public bool UpdateJobExecutionLog(JobExecutionLog jobExecutionLog)
+        public async Task<bool> UpdateJobExecutionLog(JobExecutionLog jobExecutionLog)
         {
             bool status = false;
             try
             {
-                _context.JobExecutionLogs.Update(jobExecutionLog);
-                _context.SaveChanges();
-                status = true;
+                var existingLog = await _context.JobExecutionLogs.FindAsync(jobExecutionLog.ExecutionLogId);
+                if (existingLog == null)
+                {
+                    _logger.LogWarning($"JobExecutionLog with ID {jobExecutionLog.ExecutionLogId} not found.");
+                    status = false;
+                }
+                else
+                {
+                    _context.JobExecutionLogs.Update(jobExecutionLog);
+                    await _context.SaveChangesAsync();
+                    status = true;
+                }
             }
             catch (Exception ex)
             {
@@ -401,16 +466,16 @@ namespace JobSchedularDAL
             return status;
         }
 
-        public bool DeleteJobExecutionLog(string executionLogId)
+        public async Task<bool> DeleteJobExecutionLog(string executionLogId)
         {
             bool status = false;
             try
             {
-                var jobExecutionLog = _context.JobExecutionLogs.Find(executionLogId);
+                var jobExecutionLog = await _context.JobExecutionLogs.FindAsync(executionLogId);
                 if (jobExecutionLog != null)
                 {
                     _context.JobExecutionLogs.Remove(jobExecutionLog);
-                    _context.SaveChanges();
+                    await _context.SaveChangesAsync();
                     status = true;
                 }
                 return status;
@@ -427,13 +492,13 @@ namespace JobSchedularDAL
         #endregion
 
         #region Execution Node
-        public bool AddExecutionNode(ExecutionNode executionNode)
+        public async Task<bool> AddExecutionNode(ExecutionNode executionNode)
         {
             bool status = false;
             try
             {
-                _context.ExecutionNodes.Add(executionNode);
-                _context.SaveChanges();
+                await _context.ExecutionNodes.AddAsync(executionNode);
+                await _context.SaveChangesAsync();
                 status = true;
             }
             catch (Exception ex)
@@ -443,12 +508,12 @@ namespace JobSchedularDAL
             return status;
         }
 
-        public List<ExecutionNode> GetExecutionNodes()
+        public async Task<List<ExecutionNode>> GetExecutionNodes()
         {
             List<ExecutionNode> executionNodes = new List<ExecutionNode>();
             try
             {
-                executionNodes = _context.ExecutionNodes.ToList();
+                executionNodes = await _context.ExecutionNodes.ToListAsync();
             }
             catch (Exception ex)
             {
@@ -457,12 +522,12 @@ namespace JobSchedularDAL
             return executionNodes;
         }
 
-        public ExecutionNode GetExecutionNodeById(string nodeId)
+        public async Task<ExecutionNode> GetExecutionNodeById(string nodeId)
         {
             ExecutionNode executionNode = new ExecutionNode();
             try
             {
-                executionNode = _context.ExecutionNodes.Find(nodeId);
+                executionNode = await _context.ExecutionNodes.FindAsync(nodeId);
             }
             catch (Exception ex)
             {
@@ -471,12 +536,12 @@ namespace JobSchedularDAL
             return executionNode;
         }
 
-        public ExecutionNode GetExecutionNodeByIpAddress(string ipAddress)
+        public async Task<ExecutionNode> GetExecutionNodeByIpAddress(string ipAddress)
         {
             ExecutionNode executionNode = new ExecutionNode();
             try
             {
-                executionNode = _context.ExecutionNodes.Where(en => en.NodeIpaddress == ipAddress).FirstOrDefault();
+                executionNode = await _context.ExecutionNodes.Where(en => en.NodeIpaddress == ipAddress).FirstOrDefaultAsync();
             }
             catch (Exception ex)
             {
@@ -485,12 +550,12 @@ namespace JobSchedularDAL
             return executionNode;
         }
 
-        public string CheckExecutionNodeStatus(string nodeId)
+        public async Task<string> CheckExecutionNodeStatus(string nodeId)
         {
             string status = string.Empty;
             try
             {
-                var executionNode = _context.ExecutionNodes.Find(nodeId);
+                var executionNode = await _context.ExecutionNodes.FindAsync(nodeId);
                 if (executionNode != null)
                 {
                     status = executionNode.NodeStatus;
@@ -502,14 +567,23 @@ namespace JobSchedularDAL
             }
             return status;
         }
-        public bool UpdateExecutionNode(ExecutionNode executionNode)
+        public async Task<bool> UpdateExecutionNode(ExecutionNode executionNode)
         {
             bool status = false;
             try
             {
-                _context.ExecutionNodes.Update(executionNode);
-                _context.SaveChanges();
-                status = true;
+                var existingNode = await _context.ExecutionNodes.FindAsync(executionNode.NodeId);
+                if (existingNode != null)
+                {
+                    _context.ExecutionNodes.Update(executionNode);
+                    await _context.SaveChangesAsync();
+                    status = true;
+                }
+                else
+                {
+                    _logger.LogWarning($"ExecutionNode with ID {executionNode.NodeId} not found.");
+                    status = false;
+                }
             }
             catch (Exception ex)
             {
@@ -518,17 +592,21 @@ namespace JobSchedularDAL
             return status;
         }
 
-        public bool DeleteExecutionNode(string nodeId)
+        public async Task<bool> DeleteExecutionNode(string nodeId)
         {
             bool status = false;
             try
             {
-                var executionNode = _context.ExecutionNodes.Find(nodeId);
+                var executionNode = await _context.ExecutionNodes.FindAsync(nodeId);
                 if (executionNode != null)
                 {
                     _context.ExecutionNodes.Remove(executionNode);
-                    _context.SaveChanges();
+                    await _context.SaveChangesAsync();
                     status = true;
+                }
+                else
+                {
+                    status = false;
                 }
             }
             catch (Exception ex)
@@ -540,13 +618,13 @@ namespace JobSchedularDAL
         #endregion
 
         #region Resource Allocation
-        public bool AddResourceAllocation(ResourceAllocation resourceAllocation)
+        public async Task<bool> AddResourceAllocation(ResourceAllocation resourceAllocation)
         {
             bool status = false;
             try
             {
-                _context.ResourceAllocations.Add(resourceAllocation);
-                _context.SaveChanges();
+                await _context.ResourceAllocations.AddAsync(resourceAllocation);
+                await _context.SaveChangesAsync();
                 status = true;
             }
             catch (Exception ex)
@@ -556,12 +634,12 @@ namespace JobSchedularDAL
             return status;
         }
 
-        public List<ResourceAllocation> GetResourceAllocations()
+        public async Task<List<ResourceAllocation>> GetResourceAllocations()
         {
             List<ResourceAllocation> resourceAllocations = new List<ResourceAllocation>();
             try
             {
-                resourceAllocations = _context.ResourceAllocations.ToList();
+                resourceAllocations = await _context.ResourceAllocations.ToListAsync();
             }
             catch (Exception ex)
             {
@@ -570,12 +648,29 @@ namespace JobSchedularDAL
             return resourceAllocations;
         }
 
-        public List<ResourceAllocation> GetResourceAllocationsByJobId(string jobId)
+        public async Task<List<string>> GetDueJobIdsAsync(DateTime now)
+        {
+            try
+            {
+                return await _context.JobSchedules
+                .Where(s => s.Status == "Scheduled" && s.ScheduledExecutionTime <= now)
+                .Select(s => s.JobId)
+                .ToListAsync();
+            }
+            catch (Exception)
+            {
+                _logger.LogError("Error fetching due job IDs.");
+                return new List<string>();
+
+            }
+            
+        }
+        public async Task<List<ResourceAllocation>> GetResourceAllocationsByJobId(string jobId)
         {
             List<ResourceAllocation> resourceAllocations = new List<ResourceAllocation>();
             try
             {
-                resourceAllocations = _context.ResourceAllocations.Where(ra => ra.JobId == jobId).ToList();
+                resourceAllocations = await _context.ResourceAllocations.Where(ra => ra.JobId == jobId).ToListAsync();
             }
             catch (Exception ex)
             {
@@ -584,12 +679,12 @@ namespace JobSchedularDAL
             return resourceAllocations;
         }
 
-        public ResourceAllocation GetResourceAllocationById(string allocationId)
+        public async Task<ResourceAllocation> GetResourceAllocationById(string allocationId)
         {
             ResourceAllocation resourceAllocation = new ResourceAllocation();
             try
             {
-                resourceAllocation = _context.ResourceAllocations.Find(allocationId);
+                resourceAllocation = await _context.ResourceAllocations.FindAsync(allocationId);
             }
             catch (Exception ex)
             {
@@ -598,12 +693,12 @@ namespace JobSchedularDAL
             return resourceAllocation;
         }
 
-        public ResourceAllocation GetResourceAllocationByexecutionNodeId(string executionNodeId)
+        public async Task<ResourceAllocation> GetResourceAllocationByexecutionNodeId(string executionNodeId)
         {
             ResourceAllocation resourceAllocation = new ResourceAllocation();
             try
             {
-                resourceAllocation = _context.ResourceAllocations.Where(ra => ra.ExecutionNodeId == executionNodeId).FirstOrDefault();
+                resourceAllocation = await _context.ResourceAllocations.Where(ra => ra.ExecutionNodeId == executionNodeId).FirstOrDefaultAsync();
             }
             catch (Exception ex)
             {
@@ -612,13 +707,13 @@ namespace JobSchedularDAL
             return resourceAllocation;
         }
 
-        public bool UpdateResourceAllocation(ResourceAllocation resourceAllocation)
+        public async Task<bool> UpdateResourceAllocation(ResourceAllocation resourceAllocation)
         {
             bool status = false;
             try
             {
                 _context.ResourceAllocations.Update(resourceAllocation);
-                _context.SaveChanges();
+                await _context.SaveChangesAsync();
                 status = true;
             }
             catch (Exception ex)
@@ -628,16 +723,16 @@ namespace JobSchedularDAL
             return status;
         }
 
-        public bool DeleteResourceAllocation(string allocationId)
+        public async Task<bool> DeleteResourceAllocation(string allocationId)
         {
             bool status = false;
             try
             {
-                var resourceAllocation = _context.ResourceAllocations.Find(allocationId);
+                var resourceAllocation = await _context.ResourceAllocations.FindAsync(allocationId);
                 if (resourceAllocation != null)
                 {
                     _context.ResourceAllocations.Remove(resourceAllocation);
-                    _context.SaveChanges();
+                    await _context.SaveChangesAsync();
                     status = true;
                 }
             }
@@ -651,13 +746,13 @@ namespace JobSchedularDAL
         #endregion
 
         #region Job Retry
-        public bool AddJobRetry(JobRetry jobRetry)
+        public async Task<bool> AddJobRetry(JobRetry jobRetry)
         {
             bool status = false;
             try
             {
-                _context.JobRetries.Add(jobRetry);
-                _context.SaveChanges();
+                await _context.JobRetries.AddAsync(jobRetry);
+                await _context.SaveChangesAsync();
                 status = true;
             }
             catch (Exception ex)
@@ -667,12 +762,12 @@ namespace JobSchedularDAL
             return status;
         }
 
-        public List<JobRetry> GetJobRetries()
+        public async Task<List<JobRetry>> GetJobRetries()
         {
             List<JobRetry> jobRetries = new List<JobRetry>();
             try
             {
-                jobRetries = _context.JobRetries.ToList();
+                jobRetries = await _context.JobRetries.AsNoTracking().ToListAsync();
             }
             catch (Exception ex)
             {
@@ -681,12 +776,12 @@ namespace JobSchedularDAL
             return jobRetries;
         }
 
-        public JobRetry GetJobRetryById(string retryId)
+        public async Task<JobRetry> GetJobRetryById(string retryId)
         {
             JobRetry jobRetry = new JobRetry();
             try
             {
-                jobRetry = _context.JobRetries.Find(retryId);
+                jobRetry = await _context.JobRetries.FindAsync(retryId);
             }
             catch (Exception ex)
             {
@@ -695,13 +790,21 @@ namespace JobSchedularDAL
             return jobRetry;
         }
 
-        public int GetJobRetryCount(string jobId)
+        public async Task<int> GetJobRetryCount(string jobId)
         {
             int cnt = 0;
             try
             {
-                var jobRetry = _context.JobRetries.Where(jb => jb.JobId == jobId).FirstOrDefault();
-                cnt = jobRetry.RetryAttemptNumber;
+                var jobRetry = await _context.JobRetries.Where(jb => jb.JobId == jobId).FirstOrDefaultAsync();
+                if (jobRetry != null)
+                {
+                    cnt = jobRetry.RetryAttemptNumber;
+                }
+                else
+                {
+                    return -1;
+                }
+
             }
             catch (Exception ex)
             {
@@ -712,13 +815,20 @@ namespace JobSchedularDAL
 
         }
 
-        public string JobRetryStatus(string jobId)
+        public async Task<string> JobRetryStatus(string jobId)
         {
             string status = string.Empty;
             try
             {
-                var jobRetry = _context.JobRetries.Where(jb => jb.JobId == jobId).FirstOrDefault();
-                status = jobRetry.RetryStatus;
+                var jobRetry = await _context.JobRetries.Where(jb => jb.JobId == jobId).FirstOrDefaultAsync();
+                if (jobRetry != null)
+                {
+                    status = jobRetry.RetryStatus;
+                }
+                else
+                {
+                    status = "";
+                }
             }
             catch (Exception ex)
             {
@@ -728,13 +838,14 @@ namespace JobSchedularDAL
             return status;
         }
 
-        public bool UpdateJobRetry(JobRetry jobRetry)
+        public async Task<bool> UpdateJobRetry(JobRetry jobRetry)
         {
             bool status = false;
             try
             {
+                var existingJobRetry = await _context.JobRetries.Where(jr => jr.RetryId == jobRetry.RetryId).FirstOrDefaultAsync();
                 _context.JobRetries.Update(jobRetry);
-                _context.SaveChanges();
+                await _context.SaveChangesAsync();
                 status = true;
             }
             catch (Exception ex)
@@ -744,17 +855,22 @@ namespace JobSchedularDAL
             return status;
         }
 
-        public bool DeleteJobRetry(string jobId)
+        public async Task<bool> DeleteJobRetry(string jobId)
         {
             bool status = false;
             try
             {
-                var jobRetry = _context.JobRetries.Where(jr => jr.JobId == jobId).FirstOrDefault();
+                var jobRetry = await _context.JobRetries.Where(jr => jr.JobId == jobId).FirstOrDefaultAsync();
                 if (jobRetry != null)
                 {
                     _context.JobRetries.Remove(jobRetry);
                     _context.SaveChanges();
                     status = true;
+                }
+                else
+                {
+                    _logger.LogWarning($"JobRetry with Job ID {jobId} not found.");
+                    status = false;
                 }
             }
             catch (Exception ex)

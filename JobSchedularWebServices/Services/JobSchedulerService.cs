@@ -1,16 +1,26 @@
 ﻿using JobSchedularDAL;
 using Quartz;
 using JobSchedularDAL.Models;
+using Microsoft.Extensions.DependencyInjection;
+
 namespace JobSchedularWebServices.Services
 {
-    // Example: Background Service that checks schedules
     public class JobSchedulerService : BackgroundService
     {
         private readonly IServiceScopeFactory _scopeFactory;
         private readonly ILogger<JobSchedulerService> _logger;
+        private const int MAX_RETRY = 3;
+
+        public JobSchedulerService(IServiceScopeFactory scopeFactory, ILogger<JobSchedulerService> logger)
+        {
+            _scopeFactory = scopeFactory;
+            _logger = logger;
+        }
 
         protected override async Task ExecuteAsync(CancellationToken stoppingToken)
         {
+            _logger.LogInformation("Job Scheduler Service started.");
+
             while (!stoppingToken.IsCancellationRequested)
             {
                 try
@@ -19,162 +29,146 @@ namespace JobSchedularWebServices.Services
                     {
                         var repo = scope.ServiceProvider.GetRequiredService<IJobSchedular>();
 
-                        // 1. Get all ACTIVE job schedules
-                        var schedules = repo.GetJobSchedules();
+                       
+                        var dueJobIds = await repo.GetDueJobIdsAsync(DateTime.UtcNow);
 
-                        // 2. Check which jobs are due NOW
-                        var dueJobs = schedules.Where(s =>
-                             s.ScheduledExecutionTime <= DateTime.Now &&
-                             s.Status == "Scheduled"
-                        ).ToList();
-
-                        // 3. Execute each due job
-                        foreach (var job in dueJobs)
+                        if (dueJobIds.Any())
                         {
-                            Models.JobSchedule job1 = new Models.JobSchedule
-                            {
-                                JobId = job.JobId,
-                                ScheduledExecutionTime = job.ScheduledExecutionTime,
-                                Status = job.Status
-                            };
-
-                            await ExecuteJobAsync(job1, repo);
-
-                            // 4. Update next run time
-                            job1.NextRunTime = CalculateNextRun(job1.SchedulePattern);
-                            repo.UpdateJobSchedule(job);
+                            var tasks = dueJobIds.Select(id => Task.Run(() => ProcessJobById(id), stoppingToken));
+                            await Task.WhenAll(tasks);
                         }
                     }
                 }
                 catch (Exception ex)
                 {
-                    // Log the error (recommended)
-                    _logger.LogError(ex, "Error occurred in JobSchedulerService ExecuteAsync loop.");
+                    _logger.LogError(ex, "Error in main scheduler heartbeat.");
                 }
 
-                // 5. Wait before checking again
-                await Task.Delay(TimeSpan.FromMinutes(1), stoppingToken);
+                await Task.Delay(TimeSpan.FromSeconds(30), stoppingToken);
             }
         }
 
-
-        private DateTime? CalculateNextRun(string cronExpression)
+        private async Task ProcessJobById(string jobId)
         {
-            try
+            
+            using (var scope = _scopeFactory.CreateScope())
             {
-                // Validate cron
-                if (!CronExpression.IsValidExpression(cronExpression))
-                    return null;
+                var repo = scope.ServiceProvider.GetRequiredService<IJobSchedular>();
 
-                var cron = new CronExpression(cronExpression);
+                var job = await repo.ClaimJobAsync(jobId);
+                if (job == null) return;
 
-                // Calculate next run from NOW
-                var nextFireTime = cron.GetNextValidTimeAfter(DateTimeOffset.Now);
+                try
+                {
+                    _logger.LogInformation($"Processing Job {jobId}...");
+                    await ExecuteJobWithLoggingAsync(job, repo);
 
-                return nextFireTime?.DateTime;
-            }
-            catch (Exception ex)
-            {
-                _logger.LogError($"Cron calculation failed: {ex.Message}");
-                return null;
+                    var nextRun = CalculateNextRun(job.SchedulePattern);
+                    if (nextRun.HasValue)
+                    {
+                        job.ScheduledExecutionTime = nextRun.Value;
+                        job.Status = "Scheduled";
+                    }
+                    else
+                    {
+                        job.Status = "Completed";
+                    }
+                }
+                catch (Exception ex)
+                {
+                    _logger.LogError(ex, $"Job {jobId} failed. Handling retry...");
+                    await HandleJobRetry(job.JobId, repo);
+                    job.Status = "Scheduled";
+                }
+                finally
+                {
+                    await repo.UpdateJobSchedule(job);
+                }
             }
         }
 
-        private async Task ExecuteJobAsync(Models.JobSchedule schedule, IJobSchedular repo)
+        private async Task ExecuteJobWithLoggingAsync(JobSchedule schedule, IJobSchedular repo)
         {
-            // Create execution log
-            JobExecutionLog log = new JobExecutionLog
+            var log = new JobExecutionLog
             {
+                ExecutionLogId = Guid.NewGuid().ToString(),
                 JobId = schedule.JobId,
-                StartTime = DateTime.Now,
+                StartTime = DateTime.UtcNow,
                 ExecutionStatus = "Running"
             };
 
-            repo.AddJobExecutionLog(log);
+            await repo.AddJobExecutionLog(log);
 
             try
             {
-                // Get job definition
-                var jobDef = repo.GetJobDefinitionById(schedule.JobId);
+                var jobDef = await repo.GetJobDefinitionById(schedule.JobId);
+                if (jobDef == null) throw new Exception("Job definition missing.");
 
-                // Execute the actual job logic
+                 
                 await RunJobLogic(jobDef);
 
-                // Update log as successful
-                log.EndTime = DateTime.Now;
+                log.EndTime = DateTime.UtcNow;
                 log.ExecutionStatus = "Completed";
-                repo.UpdateJobExecutionLog(log);
             }
             catch (Exception ex)
             {
-                // Update log as failed
-                log.EndTime = DateTime.Now;
+                log.EndTime = DateTime.UtcNow;
                 log.ExecutionStatus = "Failed";
                 //log.ErrorMessage = ex.Message;
-                repo.UpdateJobExecutionLog(log);
-
-                // Handle retry logic
-                HandleJobRetry(schedule.JobId, repo);
+                throw;
+            }
+            finally
+            {
+                await repo.UpdateJobExecutionLog(log);
             }
         }
 
         private async Task RunJobLogic(JobDefinition job)
         {
-            //switch (job.JobName)
-            //{
-            //    case "SendEmail":
-            //        await ExecuteEmailJob(job.JobParameters);
-            //        break;
-
-            //    //case "GenerateReport":
-            //    //    await ExecuteReportJob(job.JobParameters);
-            //    //    break;
-
-            //    //case "CallApi":
-            //    //    await ExecuteApiCall(job.JobParameters);
-            //    //    break;
-
-            //    default:
-            //        throw new Exception("Unknown job type: " + job.JobName);
-            //}
+            switch (job.JobName)
+            {
+                case "SendEmail":
+                    break;
+                default:
+                    _logger.LogWarning($"No logic defined for job type: {job.JobName}");
+                    break;
+            }
+            await Task.Delay(500);
         }
 
         private async Task HandleJobRetry(string jobId, IJobSchedular repo)
         {
-            try
+            var jobRetry = await repo.GetJobRetryById(jobId);
+            if (jobRetry == null)
             {
-                var jobRetry =  repo.GetJobRetryById(jobId);
-
-                if (jobRetry == null)
+                await repo.AddJobRetry(new JobRetry
                 {
-                    // Create a new retry if none exists
-                    jobRetry = new JobRetry
-                    {
-                        RetryId = Guid.NewGuid().ToString(),
-                        JobId = jobId,
-                        RetryAttemptNumber = 1,
-                        RetryStatus = "Pending",
-                        RetryTime = DateTime.Now.AddMinutes(5) // Example: retry after 5 minutes
-                    };
-                     repo.AddJobRetry(jobRetry);
-                    Console.WriteLine($"Created first retry for JobId: {jobId}");
-                }
-                else
-                {
-                    // Increment retry attempt
-                    jobRetry.RetryAttemptNumber += 1;
-                    jobRetry.RetryStatus = "Pending";
-                    jobRetry.RetryTime = DateTime.Now.AddMinutes(5); // Retry after 5 minutes
-
-                    repo.UpdateJobRetry(jobRetry);
-                    Console.WriteLine($"Updated retry attempt {jobRetry.RetryAttemptNumber} for JobId: {jobId}");
-                }
+                    RetryId = Guid.NewGuid().ToString(),
+                    JobId = jobId,
+                    RetryAttemptNumber = 1,
+                    RetryStatus = "Pending",
+                    RetryTime = DateTime.UtcNow.AddMinutes(5)
+                });
             }
-            catch (Exception ex)
+            else if (jobRetry.RetryAttemptNumber < MAX_RETRY)
             {
-                Console.WriteLine($"Error handling job retry for JobId {jobId}: {ex.Message}");
+                jobRetry.RetryAttemptNumber++;
+                jobRetry.RetryTime = DateTime.UtcNow.AddMinutes(Math.Pow(2, jobRetry.RetryAttemptNumber)); // Exponential backoff
+                await repo.UpdateJobRetry(jobRetry);
+            }
+            else
+            {
+                _logger.LogCritical($"Job {jobId} permanently failed after {MAX_RETRY} retries.");
             }
         }
 
+        private DateTime? CalculateNextRun(string cronExpression)
+        {
+            if (string.IsNullOrEmpty(cronExpression) || !CronExpression.IsValidExpression(cronExpression))
+                return null;
+
+            var cron = new CronExpression(cronExpression);
+            return cron.GetNextValidTimeAfter(DateTimeOffset.UtcNow)?.DateTime;
+        }
     }
 }
