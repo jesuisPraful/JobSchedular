@@ -128,12 +128,26 @@ namespace JobSchedularWebServices.Services
             switch (job.JobName)
             {
                 case "SendEmail":
+                    // Call the Email Microservice API
+                    using (var scope = _scopeFactory.CreateScope())
+                    {
+                        var httpClientFactory = scope.ServiceProvider.GetRequiredService<IHttpClientFactory>();
+                        var client = httpClientFactory.CreateClient();
+
+                        // Use the URL where your Email Microservice is running
+                        var response = await client.PostAsync("https://email-service-url/api/email/trigger-pending-emails", null);
+
+                        if (!response.IsSuccessStatusCode)
+                        {
+                            throw new Exception($"Email service returned {response.StatusCode}");
+                        }
+                    }
                     break;
+
                 default:
                     _logger.LogWarning($"No logic defined for job type: {job.JobName}");
                     break;
             }
-            await Task.Delay(500);
         }
 
         private async Task HandleJobRetry(string jobId, IJobSchedular repo)

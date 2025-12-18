@@ -434,6 +434,18 @@
           "Port": 7002
         }
       ]
+    },
+    {
+      "UpstreamPathTemplate": "/trigger-emails",
+      "UpstreamHttpMethod": [ "POST" ],
+      "DownstreamPathTemplate": "/api/email/trigger-pending-emails",
+      "DownstreamScheme": "https",
+      "DownstreamHostAndPorts": [
+        {
+          "Host": "localhost",
+          "Port": 7002
+        }
+      ]
     }
   ],
   "GlobalConfiguration": {

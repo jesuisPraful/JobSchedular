@@ -1,4 +1,5 @@
 using EmailServiceDAL;
+using EmailServiceWebServices.Services;
 namespace EmailServiceWebServices
 {
     public class Program
@@ -15,6 +16,7 @@ namespace EmailServiceWebServices
             builder.Services.AddSwaggerGen();
 
             builder.Services.AddScoped<IEmailService, EmailServiceRepository>();
+            builder.Services.AddTransient<EmailSender>();
             var app = builder.Build();
 
             // Configure the HTTP request pipeline.

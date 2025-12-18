@@ -1,5 +1,6 @@
 ﻿using EmailServiceDAL;
 using EmailServiceDAL.Models;
+using EmailServiceWebServices.Services;
 using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Mvc;
 
@@ -10,9 +11,11 @@ namespace EmailServiceWebServices.Controllers
     public class EmailController : ControllerBase
     {
         private readonly IEmailService _repository;
-        public EmailController(IEmailService repository)
+        private readonly EmailSender _emailSender;
+        public EmailController(IEmailService repository,EmailSender emailSender)
         {
             _repository = repository;
+            _emailSender = emailSender;
         }
         [HttpPost]
         public async Task<IActionResult> SendEmailAsync(Models.Email email)
@@ -51,6 +54,40 @@ namespace EmailServiceWebServices.Controllers
             {
                 return StatusCode(StatusCodes.Status500InternalServerError, "Server error");
             }
+        }
+
+        [HttpPost("trigger-pending-emails")]
+        public async Task<IActionResult> ProcessEmails()
+        {
+            var emails = await _repository.GetPendingEmailAsync();
+
+            foreach (var email in emails)
+            {
+                try
+                {  
+                    Models.Email email1 = new Models.Email
+                    {
+                        Id = email.Id,
+                        ToEmail = email.ToEmail,
+                        Cc = email.Cc,
+                        Bcc = email.Bcc,
+                        Subject = email.Subject,
+                        Body = email.Body,
+                        TemplateId = email.TemplateId,
+                        Status = email.Status,
+                        RetryCount = email.RetryCount,
+                        CreatedAt = email.CreatedAt,
+                        SentAt = email.SentAt
+
+                    };
+                    await _emailSender.SendAsync(email1);
+                }
+                catch (Exception)
+                {
+                    throw;
+                }
+            }
+            return Ok("Pending emails processed successfully");
         }
 
         [HttpGet]
